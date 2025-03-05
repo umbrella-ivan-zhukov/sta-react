@@ -1,3 +1,7 @@
+import { useContext } from 'react';
+
+// import Api from sta
+
 export const useAPI = () => {
   const { baseUrl, getAccessToken } = useContext(MyContext);
 
