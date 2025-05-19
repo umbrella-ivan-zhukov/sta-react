@@ -1,19 +1,26 @@
+import { AxiosError, AxiosResponse } from 'axios';
 import { useCallback, useRef, useState } from 'react';
-
-// import HttpResponse from sta
 
 type MutateFunc<A extends any[], T> = (...args: A) => Promise<T | null>;
 
 type UseMutateReturn<A extends any[], T, E> = {
   data: T | null;
   error: E | null;
-  isPending: boolean;
+  isLoading: boolean;
   mutate: MutateFunc<A, T>;
   statusCode: number | null;
 };
 
-export const useMutate = <A extends any[], T, E>(
-  callback: (...args: A) => Promise<HttpResponse<T, E>>,
+/**
+ * Custom React hook to handle requests from swagger-typescript-api
+ *
+ * @example
+ * const { isLoading, data, error, mutate } = useMutate(apiMethod)
+ * const {...} = useMutate((body) => apiMethod(id, body))
+ * mutate({...})
+ */
+export const useMutate = <A extends any[], T, E = any>(
+  callback: (...args: A) => Promise<AxiosResponse<T>>,
   opts?: {
     onSuccess?: (result: T | null) => void;
     onError?: (reason: E | null, status: number) => void;
@@ -23,11 +30,11 @@ export const useMutate = <A extends any[], T, E>(
 
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<E | null>(null);
-  const [isPending, setIsPending] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
   const [statusCode, setStatusCode] = useState<number | null>(null);
 
   callbackRef.current = async (...args: A): Promise<T | null> => {
-    setIsPending(true);
+    setIsLoading(true);
     setData(null);
     setError(null);
     setStatusCode(null);
@@ -35,37 +42,30 @@ export const useMutate = <A extends any[], T, E>(
     let result: T | null = null;
 
     try {
-      const { data: responseData, status: responseStatus } = await callback(
-        ...args,
-      );
+      const { data: responseData, status: responseStatus } = await callback(...args);
+      result = responseData;
 
       setData(responseData);
       setStatusCode(responseStatus);
 
-      result = responseData;
-      opts?.onSuccess?.(result);
+      opts?.onSuccess?.(responseData);
     } catch (e: any) {
-      const status = e?.status ?? 0;
-      const reason: E =
-        e['error'] ?? (e instanceof Response ? await e?.json?.() : e);
-      const message = getErrorMessage(reason);
+      const typedError = e as AxiosError<E>;
 
-      setError(reason);
-      setStatusCode(status);
+      const { status: responseStatus = 0, data: responseData = null } = typedError?.response ?? {};
 
-      opts?.onError?.(reason, status);
-      throw new Error(message);
+      setError(responseData);
+      setStatusCode(responseStatus);
+
+      opts?.onError?.(responseData, responseStatus);
     } finally {
-      setIsPending(false);
+      setIsLoading(false);
     }
 
     return result;
   };
 
-  const mutate = useCallback<MutateFunc<A, T>>(
-    async (...args) => callbackRef.current?.(...args) ?? null,
-    [],
-  );
+  const mutate = useCallback<MutateFunc<A, T>>(async (...args) => callbackRef.current?.(...args) ?? null, []);
 
-  return { data, error, isPending, mutate, statusCode };
+  return { data, error, isLoading, mutate, statusCode };
 };

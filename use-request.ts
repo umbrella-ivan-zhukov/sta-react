@@ -1,7 +1,5 @@
-import { get } from 'lodash';
+import { AxiosError, AxiosResponse } from 'axios';
 import { useCallback, useEffect, useRef, useState } from 'react';
-
-// import HttpResponse from sta
 
 type OptionalSpread<S> = S extends undefined ? [] : any[];
 
@@ -16,8 +14,18 @@ type UseRequestReturn<A extends any[], T, E, I> = {
   request: RequestFunc<A, T>;
 };
 
-export const useRequest = <A extends any[], T, E, I>(
-  callback?: (...args: OptionalSpread<A>) => Promise<HttpResponse<T, E>>,
+/**
+ * Custom React hook to handle requests from swagger-typescript-api
+ *
+ * @example
+ * const { isLoading, data, error, request } = useRequest(apiMethod)
+ * const {...} = useRequest(id ? () => apiMethod(id) : undefined, [id])
+ * const {...} = useRequest(() => apiMethod(query), [query])
+ * request()
+ */
+
+export const useRequest = <A extends any[], T, I, E = any>(
+  callback?: (...args: OptionalSpread<A>) => Promise<AxiosResponse<T>>,
   deps?: any[],
   opts?: {
     getList?: (data: T | null) => I[] | null;
@@ -34,9 +42,7 @@ export const useRequest = <A extends any[], T, E, I>(
   const [isLoading, setIsLoading] = useState(false);
   const [statusCode, setStatusCode] = useState<number | null>(null);
 
-  callbackRef.current = async (
-    ...args: OptionalSpread<A>
-  ): Promise<T | null> => {
+  callbackRef.current = async (...args: OptionalSpread<A>): Promise<T | null> => {
     if (!callback) return null;
 
     setIsLoading(true);
@@ -47,33 +53,27 @@ export const useRequest = <A extends any[], T, E, I>(
     let result: T | null = null;
 
     try {
-      const { data: responseData, status: responseStatus } = await callback(
-        ...args,
-      );
+      const { data: responseData, status: responseStatus } = await callback(...args);
+      result = responseData;
 
+      const flush = Boolean(opts?.setFlush?.());
       const items = opts?.getList ? opts.getList(responseData) : null;
-      const flush =
-        get(responseData, 'part.offset') === 0 || Boolean(opts?.setFlush?.());
+      const responseList = items ? [...(flush ? [] : list ?? []), ...items] : list;
 
       setData(responseData);
       setStatusCode(responseStatus);
-      setList((prev) =>
-        items ? [...(flush ? [] : (prev ?? [])), ...items] : prev,
-      );
+      setList(responseList);
 
-      result = responseData;
-      opts?.onSuccess?.(result);
+      opts?.onSuccess?.(responseData);
     } catch (e: any) {
-      const status = e?.status ?? 0;
-      const reason: E =
-        e['error'] ?? (e instanceof Response ? await e?.json?.() : e);
-      const message = getErrorMessage(reason);
+      const typedError = e as AxiosError<E>;
 
-      setError(reason);
-      setStatusCode(status);
+      const { status: responseStatus = 0, data: responseData = null } = typedError?.response ?? {};
 
-      opts?.onError?.(reason, status);
-      throw new Error(message);
+      setError(responseData);
+      setStatusCode(responseStatus);
+
+      opts?.onError?.(responseData, responseStatus);
     } finally {
       setIsLoading(false);
     }
@@ -81,13 +81,11 @@ export const useRequest = <A extends any[], T, E, I>(
     return result;
   };
 
-  const request = useCallback<RequestFunc<A, T>>(
-    async (...args) => callbackRef.current?.(...args) ?? null,
-    [],
-  );
+  const request = useCallback<RequestFunc<A, T>>(async (...args) => callbackRef.current?.(...args) ?? null, []);
 
   useEffect(() => {
     callbackRef.current?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...(deps ?? [])]);
 
   return { data, error, isLoading, request, list, statusCode };
